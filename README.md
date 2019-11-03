@@ -19,14 +19,14 @@ To use COCO you also need [pycocotools](https://github.com/cocodataset/cocoapi) 
 To train and evaluate a normal FastRCNN on VOC 2007 launch the following command:
 
 ```
-python3 frcnn.py sigmoid --run_name=resnet_sigmoid_20 --num_classes=20 --dataset=voc07 --max_iterations=40000 --action=train,eval --eval_first_n=5000 --eval_ckpts=40k --learning_rate=0.001 --sigmoid
+python3 frcnn.py --sigmoid --run_name=resnet_sigmoid_20 --num_classes=20 --dataset=voc07 --max_iterations=40000 --action=train,eval --eval_first_n=5000 --eval_ckpts=40k --learning_rate=0.001 --sigmoid
 ```
 
 To train 10 classes network and then extend it for 10 more classes:
 
 ```
-python3 frcnn.py sigmoid --run_name=resnet_sigmoid_10 --num_classes=10 --dataset=voc07 --max_iterations=40000 --action=train,eval --eval_ckpts=40k --learning_rate=0.001 --lr_decay 30000 --sigmoid
-python3 frcnn.py sigmoid --run_name=resnet_sigmoid_10_ext10 --num_classes=10 --extend=10 --dataset=voc07 --max_iterations=40000 --action=train,eval --eval_ckpts=40k --learning_rate=0.0001 --sigmoid --pretrained_net=resnet_sigmoid_10 --distillation --bias_distillation
+python3 frcnn.py --sigmoid --run_name=resnet_sigmoid_10 --num_classes=10 --dataset=voc07 --max_iterations=40000 --action=train,eval --eval_ckpts=40k --learning_rate=0.001 --lr_decay 30000 --sigmoid
+python3 frcnn.py --sigmoid --run_name=resnet_sigmoid_10_ext10 --num_classes=10 --extend=10 --dataset=voc07 --max_iterations=40000 --action=train,eval --eval_ckpts=40k --learning_rate=0.0001 --sigmoid --pretrained_net=resnet_sigmoid_10 --distillation --bias_distillation
 ```
 
 The same way to train a COCO model on all classes:

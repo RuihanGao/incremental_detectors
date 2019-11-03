@@ -31,36 +31,39 @@ class Network(object):
         if distillation:
             self.create_distillation_subnet()
         with tf.variable_scope(self.var_scope, "network", reuse=reuse):
-            self.inference()
-        if distillation:
+            self.inference() # RH: return the inference of a fixed number of 20 classes
+        if distillation: # RH: num-split. each has a half. How to compare the results later?
+            # TODO: check the shape of self.logits. Is that precomputed as said in paper P3404?
             self.logits, self.logits_for_distillation = tf.split(self.logits, 2, axis=0)
             self.bboxes, self.bboxes_for_distillation = tf.split(self.bboxes, 2, axis=0)
 
     def compute_frcnn_crossentropy_loss(self, skipped_classes=0):
         # TODO think again about skipped classes in the light of cifar10 exps
         if args.sigmoid:
+            # one hot encoding
             oh_labels = tf.one_hot(self.cats, self.num_classes+1)
             cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.logits, labels=oh_labels)
             cross_entropy = tf.reduce_sum(cross_entropy[:, (1+skipped_classes):], 1)
         else:
             cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.logits, labels=self.cats)
         cross_entropy_mean = args.frcnn_loss_coef*tf.reduce_mean(cross_entropy)
-        return cross_entropy_mean
+        return cross_entropy_mean  # RH: which is an op, not a variable as in PyTorch
 
     def compute_frcnn_bbox_loss(self):
         oh_labels = tf.one_hot(self.cats, self.num_classes+1)
-        bboxes = tf.reshape(self.bboxes, (-1, self.num_classes+1, 4))
-        gt_bboxes = tf.reshape(self.refine, (-1, 1, 4))
+        bboxes = tf.reshape(self.bboxes, (-1, self.num_classes+1, 4)) #RH: num_classes + 1 for background?
+        gt_bboxes = tf.reshape(self.refine, (-1, 1, 4)) # image, rois, refine, cats, proposals = [t[0] for t in dequeue] in frcnn.py
         bg_iverson = tf.to_float(tf.greater(self.cats, 0))
         bbox_loss = args.frcnn_loss_coef*tf.reduce_mean(bg_iverson*(
-            tf.reduce_sum(oh_labels*smooth_l1(bboxes, gt_bboxes), axis=1)))
+            tf.reduce_sum(oh_labels*smooth_l1(bboxes, gt_bboxes), axis=1))) 
         return bbox_loss
 
     def compute_distillation_crossentropy_loss(self):
-        cached_classes = self.num_classes - self.subnet.num_classes
+        cached_classes = self.num_classes - self.subnet.num_classes # RH: candidates to be added later. Since it is selected in alphanumerical order, so a scalar will do?
         logits = self.logits_for_distillation[:, :cached_classes+1]
 
         if args.crossentropy and args.sigmoid:
+            # TODO: check the second dimension of distillated_logits (I guess the first dim represents the sampled class)
             class_distillation_loss = tf.reduce_mean(tf.reduce_sum(
                 tf.nn.sigmoid_cross_entropy_with_logits(logits=logits[:, 1:],
                                                         labels=tf.sigmoid(self.distillated_logits[:, 1:])),
@@ -105,24 +108,26 @@ class Network(object):
                                   var_scope=DISTILLATION_SCOPE,
                                   reuse=self.reuse, num_classes=args.num_classes,
                                   distillation=False, proposals=self.proposals)
-            logits = tf.stop_gradient(self.subnet.logits)
+            # note: self.subnet.logits & bboxes are not splited since distillation is False
+            logits = tf.stop_gradient(self.subnet.logits) # RH: pretend that the value is a constant
             bboxes = tf.stop_gradient(self.subnet.bboxes)
 
-            assert args.bias_distillation  # XXX
+            assert args.bias_distillation  # biased to non-background proposal so as to maintain more info of old classes
             if args.bias_distillation:
                 if args.filter_proposals:
                     raise NotImplemented
-                #     all_proposals, idx = filter_proposals(proposals, gt_bboxes)
+                #     all_proposals, idx = filter_proposals(proposals, gt_bboxes)  # see utils.py
                 #     if len(gt_bboxes) > 0:
                 #         logits = logits[idx]
                 #         bboxes = bboxes[idx]
-                bg_prob = tf.nn.softmax(logits)[:, 0]
-                _, sorted_idx = tf.nn.top_k(-bg_prob, 2*args.batch_size)
-                dist_idx = tf_random_sample(args.batch_size, sorted_idx)[0]
+                bg_prob = tf.nn.softmax(logits)[:, 0] # RH: does 0 mean that bg is treated as the first "class"
+                _, sorted_idx = tf.nn.top_k(-bg_prob, 2*args.batch_size) # RH: input, k, for sampling
+                dist_idx = tf_random_sample(args.batch_size, sorted_idx)[0] # RH: e.g. randomly select 64 from 128 highest ranking classes
                 # TODO more stop grad?
-                self.distillated_logits = tf.gather(logits, dist_idx)
-                self.distillated_proposals = tf.gather(self.proposals, dist_idx)
-                self.distillated_bboxes = tf.gather(bboxes, dist_idx)
+                # TODO: RH: sampling proposals for comparison
+                self.distillated_logits = tf.gather(logits, dist_idx) # inputs
+                self.distillated_proposals = tf.gather(self.proposals, dist_idx) # targets
+                self.distillated_bboxes = tf.gather(bboxes, dist_idx) # regression bb
                 self.rois_ph = tf.concat([self.rois_ph, self.distillated_proposals], 0)
 
     def compute_train_accuracy(self):
@@ -144,6 +149,7 @@ class Network(object):
                             weights_regularizer=slim.l2_regularizer(args.weight_decay),
                             biases_initializer=tf.zeros_initializer(),
                             reuse=self.reuse):
+            # RH: build the fc layers for classification and regression respectively, train later
             self.logits_layer = slim.fully_connected(self.fc_out, total_classes+1, scope='fc8',
                                                      weights_initializer=tf.truncated_normal_initializer(stddev=0.01))
             self.logits = self.logits_layer[:, :self.num_classes+1]
@@ -155,6 +161,7 @@ class Network(object):
             self.sigmoid = tf.sigmoid(self.logits)
 
     def _forward_pass(self, image, proposals, split=2):
+        # RH: return the ground truth in a specific way?
         H, W, _ = image.shape
         proposals = proposals.astype(np.float32)
         # TODO make it a bit more consistent idk
